@@ -1,0 +1,100 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: wagering
+      POSTGRES_DB: wagering
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: sqs
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-queues.sh:ro
+
+  migrations:
+    build: .
+    command: ["bun", "run", "migration:up"]
+    environment: &app-env
+      DATABASE_URL: postgresql://wagering:wagering@postgres:5432/wagering
+      SQS_ENDPOINT: http://localstack:4566
+      SQS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_TRANSACTIONS_QUEUE: wager-transactions.fifo
+      SQS_TRANSACTIONS_DLQ: wager-transactions-dlq.fifo
+      SQS_EVENTS_QUEUE: wager-events
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Three application instances to demonstrate multi-instance correctness.
+  app-1:
+    build: .
+    environment:
+      <<: *app-env
+      PORT: "3000"
+      INSTANCE_ID: app-1
+    ports:
+      - "3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
+  app-2:
+    build: .
+    environment:
+      <<: *app-env
+      PORT: "3000"
+      INSTANCE_ID: app-2
+    ports:
+      - "3002:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
+  app-3:
+    build: .
+    environment:
+      <<: *app-env
+      PORT: "3000"
+      INSTANCE_ID: app-3
+    ports:
+      - "3003:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
